@@ -1,0 +1,42 @@
+{
+  "scenario_1_normal": {
+    "duration_sec": 0.013,
+    "throughput_kbps": 59299.16,
+    "retransmissions": 0,
+    "timeouts": 0,
+    "duplicates": 0,
+    "missing_events": 0,
+    "integrity_ok": true,
+    "sdn_alerts_sent": 0
+  },
+  "scenario_2_static_loss": {
+    "duration_sec": 4.845,
+    "throughput_kbps": 165.13,
+    "retransmissions": 61,
+    "timeouts": 16,
+    "duplicates": 45,
+    "missing_events": 45,
+    "integrity_ok": true,
+    "sdn_alerts_sent": 0
+  },
+  "scenario_3_dynamic_loss": {
+    "duration_sec": 0.622,
+    "throughput_kbps": 1285.69,
+    "retransmissions": 8,
+    "timeouts": 2,
+    "duplicates": 4,
+    "missing_events": 2,
+    "integrity_ok": true,
+    "sdn_alerts_sent": 1
+  },
+  "scenario_4_dynamic_failover": {
+    "duration_sec": 0.624,
+    "throughput_kbps": 1282.55,
+    "retransmissions": 8,
+    "timeouts": 2,
+    "duplicates": 0,
+    "missing_events": 0,
+    "integrity_ok": true,
+    "sdn_alerts_sent": 1
+  }
+}
