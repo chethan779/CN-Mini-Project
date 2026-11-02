@@ -17,10 +17,18 @@ from protocol import (
     make_packet, parse_packet, get_file_sha256
 )
 
-def run_server(ip: str = "0.0.0.0", port: int = DEFAULT_SERVER_PORT, save_dir: str = "received"):
+def run_server(ip: str = "0.0.0.0", port: int = DEFAULT_SERVER_PORT, save_dir: str = "received", on_event = None, stop_event = None):
     """
     Runs the UDP file transfer server.
+    Supports optional on_event(event_type, data) callback and stop_event for GUI integration.
     """
+    def notify(evt_type: str, **kwargs):
+        if on_event:
+            try:
+                on_event(evt_type, kwargs)
+            except Exception:
+                pass
+
     os.makedirs(save_dir, exist_ok=True)
     
     # Create UDP socket
@@ -28,12 +36,14 @@ def run_server(ip: str = "0.0.0.0", port: int = DEFAULT_SERVER_PORT, save_dir: s
     # Enable address reuse for smooth testing/restarts
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock.bind((ip, port))
+    sock.settimeout(0.5)  # Responsive non-blocking check for stop_event
     
     print("=" * 70)
     print(f"[*] Reliable UDP Server started on {ip}:{port}")
     print(f"[*] Saving received files to directory: ./{save_dir}/")
     print(f"[*] Waiting for client file transfers...")
     print("=" * 70)
+    notify("SERVER_STARTED", ip=ip, port=port, save_dir=save_dir)
     
     # Dictionary to maintain separate state for each concurrent client:
     # Key: client_addr (ip, port)
@@ -42,7 +52,13 @@ def run_server(ip: str = "0.0.0.0", port: int = DEFAULT_SERVER_PORT, save_dir: s
     
     try:
         while True:
-            data, client_addr = sock.recvfrom(4096)
+            if stop_event and stop_event.is_set():
+                break
+            try:
+                data, client_addr = sock.recvfrom(4096)
+            except socket.timeout:
+                continue
+
             try:
                 pkt_type, seq_num, ack_num, payload = parse_packet(data)
             except ValueError as e:
@@ -88,6 +104,9 @@ def run_server(ip: str = "0.0.0.0", port: int = DEFAULT_SERVER_PORT, save_dir: s
                 
                 print(f"[SYN] Handshake from {client_addr}: File '{safe_filename}' "
                       f"({total_packets} chunks, SHA-256: {expected_sha[:16]}...)")
+                notify("SYN_RECEIVED", client=f"{client_addr[0]}:{client_addr[1]}",
+                       filename=safe_filename, total_packets=total_packets,
+                       filesize=meta.get("filesize", 0), sha256=expected_sha)
                 
                 # Send SYN-ACK (ack_num=0)
                 syn_ack_pkt = make_packet(TYPE_ACK, seq_num=0, ack_num=0, payload=b"SYN_ACK")
@@ -124,6 +143,9 @@ def run_server(ip: str = "0.0.0.0", port: int = DEFAULT_SERVER_PORT, save_dir: s
                     ack_pkt = make_packet(TYPE_ACK, seq_num=0, ack_num=cum_ack)
                     sock.sendto(ack_pkt, client_addr)
                     print(f"[DATA] Received Seq {seq_num} from {client_addr} ({len(payload)} bytes) -> Cumulative ACK {cum_ack}")
+                    notify("DATA_RECEIVED", client=f"{client_addr[0]}:{client_addr[1]}",
+                           seq=seq_num, cum_ack=cum_ack, total_packets=session["total_packets"],
+                           buffered_count=len(session["buffer"]), duplicates=session["duplicates"])
                 
                 elif seq_num < expected_seq:
                     # Duplicate packet received
@@ -133,6 +155,8 @@ def run_server(ip: str = "0.0.0.0", port: int = DEFAULT_SERVER_PORT, save_dir: s
                     ack_pkt = make_packet(TYPE_ACK, seq_num=0, ack_num=cum_ack)
                     sock.sendto(ack_pkt, client_addr)
                     print(f"[ACK] Resent Cumulative ACK {cum_ack} to {client_addr}")
+                    notify("DUPLICATE_RECEIVED", client=f"{client_addr[0]}:{client_addr[1]}",
+                           seq=seq_num, cum_ack=cum_ack, duplicates=session["duplicates"])
                 
                 else: # seq_num > expected_seq
                     # Out-of-order packet (Packet gap / Missing packet)
@@ -148,6 +172,9 @@ def run_server(ip: str = "0.0.0.0", port: int = DEFAULT_SERVER_PORT, save_dir: s
                     ack_pkt = make_packet(TYPE_ACK, seq_num=0, ack_num=cum_ack)
                     sock.sendto(ack_pkt, client_addr)
                     print(f"[ACK] Resent Cumulative ACK {cum_ack} to {client_addr}")
+                    notify("GAP_DETECTED", client=f"{client_addr[0]}:{client_addr[1]}",
+                           expected=expected_seq, got=seq_num, cum_ack=cum_ack,
+                           buffered_count=len(session["buffer"]), missing_events=session["missing_events"])
             
             # -------------------------------------------------------------
             # 3. TYPE_FIN: Transfer Complete & SHA-256 Integrity Verification
@@ -177,6 +204,11 @@ def run_server(ip: str = "0.0.0.0", port: int = DEFAULT_SERVER_PORT, save_dir: s
                 print(f"[FIN] Session closed for {client_addr}. File saved to: {save_path}")
                 print(f"      Duplicates detected: {session['duplicates']}, Missing/Out-of-order events: {session['missing_events']}")
                 print("-" * 70)
+                
+                notify("FIN_COMPLETED", client=f"{client_addr[0]}:{client_addr[1]}",
+                       filename=session["filename"], save_path=save_path,
+                       integrity_ok=integrity_ok, duplicates=session["duplicates"],
+                       missing_events=session["missing_events"], sha256=actual_sha)
                 
                 report = {
                     "integrity_ok": integrity_ok,

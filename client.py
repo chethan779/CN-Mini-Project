@@ -58,11 +58,20 @@ def run_client(server_ip: str = DEFAULT_SERVER_IP,
                sdn_ip: str = DEFAULT_SDN_IP,
                sdn_port: int = DEFAULT_SDN_PORT,
                window_size: int = DEFAULT_WINDOW_SIZE,
-               timeout: float = DEFAULT_TIMEOUT) -> dict:
+               timeout: float = DEFAULT_TIMEOUT,
+               on_event = None,
+               stop_event = None) -> dict:
     """
     Executes the file transfer to server_ip:port.
     Returns a dictionary of execution metrics.
+    Supports optional on_event(event_type, data) callback and stop_event for GUI integration.
     """
+    def notify(evt_type: str, **kwargs):
+        if on_event:
+            try:
+                on_event(evt_type, kwargs)
+            except Exception:
+                pass
     if not os.path.exists(filepath):
         raise FileNotFoundError(f"Source file not found: {filepath}")
     
@@ -102,13 +111,18 @@ def run_client(server_ip: str = DEFAULT_SERVER_IP,
     start_time = time.time()
     
     print(f"[SYN] Sending handshake metadata to {server_ip}:{port}...")
+    notify("START", filename=filename, filesize=filesize, total_packets=total_packets, sha256=file_sha256)
     while not syn_ack_received and syn_retries < max_syn_retries:
+        if stop_event and stop_event.is_set():
+            sock.close()
+            return {}
         sock.sendto(syn_packet, (server_ip, port))
         try:
             resp, _ = sock.recvfrom(2048)
             pkt_type, _, ack_num, _ = parse_packet(resp)
             if pkt_type == TYPE_ACK and ack_num == 0:
                 syn_ack_received = True
+                notify("SYN_ACK", server=f"{server_ip}:{port}")
                 print(f"[ACK] Received SYN-ACK from server. Connection established!")
                 break
         except socket.timeout:
@@ -130,12 +144,17 @@ def run_client(server_ip: str = DEFAULT_SERVER_IP,
     sdn_alerts_sent = 0
     
     while base <= total_packets:
+        if stop_event and stop_event.is_set():
+            break
         # Transmit all packets allowed by current window
         while next_seq < base + window_size and next_seq <= total_packets:
+            if stop_event and stop_event.is_set():
+                break
             chunk = chunks[next_seq]
             pkt = make_packet(TYPE_DATA, seq_num=next_seq, ack_num=0, payload=chunk)
             sock.sendto(pkt, (server_ip, port))
             print(f"[DATA] Sent Seq {next_seq} ({len(chunk)} bytes)")
+            notify("DATA_SENT", seq=next_seq, base=base, total_packets=total_packets)
             next_seq += 1
             
         # Wait for acknowledgment
@@ -149,6 +168,7 @@ def run_client(server_ip: str = DEFAULT_SERVER_IP,
                     base = ack_num + 1
                     consecutive_timeouts = 0  # reset on progress
                     print(f"[ACK] Received Cumulative ACK {ack_num} (Window slides: base={base})")
+                    notify("ACK_RECEIVED", ack=ack_num, base=base, total_packets=total_packets)
                 else:
                     # Duplicate ACK received
                     pass
@@ -158,6 +178,8 @@ def run_client(server_ip: str = DEFAULT_SERVER_IP,
             unacked_count = next_seq - base
             retransmissions += unacked_count
             print(f"[TIMEOUT & RETRANSMIT] Retransmitting unacknowledged packets from Seq {base} to {next_seq - 1}")
+            notify("TIMEOUT", base=base, unacked=unacked_count, consecutive=consecutive_timeouts,
+                   timeouts=timeouts, retransmissions=retransmissions, total_packets=total_packets)
             
             # --- Socket-SDN Integration ---
             # If consecutive timeouts occur (indicating path disruption/congestion)
@@ -171,6 +193,7 @@ def run_client(server_ip: str = DEFAULT_SERVER_IP,
                 }
                 send_sdn_alert(sdn_ip, sdn_port, alert_payload)
                 sdn_alerts_sent += 1
+                notify("SDN_ALERT", sdn_ip=sdn_ip, sdn_port=sdn_port, seq=base)
                 print(f"[SOCKET -> SDN] Sent path problem alert to SDN Controller at {sdn_ip}:{sdn_port}")
                 
             # Reset next_seq back to base to trigger retransmission of the window
@@ -219,6 +242,7 @@ def run_client(server_ip: str = DEFAULT_SERVER_IP,
         "integrity_ok": integrity_ok,
         "sdn_alerts_sent": sdn_alerts_sent,
     }
+    notify("FINISH", metrics=metrics)
     
     print("\n" + "=" * 70)
     print("                 TRANSFER SUMMARY & METRICS")

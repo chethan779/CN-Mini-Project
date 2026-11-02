@@ -18,11 +18,12 @@ import sys
 import argparse
 
 class SDNController:
-    def __init__(self, mode: str = "dynamic", listen_port: int = 9999, interval: float = 0.25):
+    def __init__(self, mode: str = "dynamic", listen_port: int = 9999, interval: float = 0.25, on_event = None):
         """
         mode: 'dynamic' (auto-reroute on failure) or 'static' (baseline, never reroute)
         listen_port: UDP port to receive alerts from UDP client (Socket-SDN integration)
         interval: polling interval for monitoring thread
+        on_event: optional callback(event_type, data) for GUI integration
         """
         self.mode = mode.lower()
         self.listen_port = listen_port
@@ -33,6 +34,14 @@ class SDNController:
         self.alert_socket = None
         self.reroute_count = 0
         self.has_ovs = shutil.which("ovs-ofctl") is not None
+        self.on_event = on_event
+
+    def _notify(self, evt_type: str, data: dict):
+        if self.on_event:
+            try:
+                self.on_event(evt_type, data)
+            except Exception:
+                pass
         
     def _run_cmd(self, cmd: list[str]) -> tuple[int, str, str]:
         """Helper to run a shell command safely."""
@@ -96,6 +105,7 @@ class SDNController:
         self._ovs("s4", "add-flow", "priority=100,in_port=1,ip,actions=output:2")
         
         print("[SDN] Primary path flows successfully configured.")
+        self._notify("PATH_CHANGED", {"path": "PRIMARY", "mode": self.mode, "reroutes": self.reroute_count})
 
     def install_backup_path(self, reason: str = "Link failure / Packet loss alert"):
         """
@@ -128,6 +138,7 @@ class SDNController:
         self.current_path = "BACKUP"
         self.reroute_count += 1
         print(f"[SDN REROUTE COMPLETE] Active path switched to BACKUP (Total reroutes: {self.reroute_count})\n")
+        self._notify("PATH_CHANGED", {"path": "BACKUP", "reason": reason, "mode": self.mode, "reroutes": self.reroute_count})
         return True
 
     def check_link_and_switch_health(self) -> tuple[bool, str]:
@@ -190,6 +201,7 @@ class SDNController:
                 seq = alert.get("seq", "?")
                 consecutive = alert.get("consecutive_timeouts", 2)
                 reason = f"Socket alert from {addr[0]}: {event} (Seq {seq}, {consecutive} consecutive timeouts)"
+                self._notify("ALERT_RECEIVED", {"alert": alert, "addr": f"{addr[0]}:{addr[1]}", "reason": reason})
                 self.install_backup_path(reason)
             except socket.timeout:
                 pass
