@@ -35,6 +35,8 @@ class SDNController:
         self.reroute_count = 0
         self.has_ovs = shutil.which("ovs-ofctl") is not None
         self.on_event = on_event
+        self.active_clients: dict[str, dict] = {}
+        self.active_sessions: dict[str, dict] = {}
 
     def _notify(self, evt_type: str, data: dict):
         if self.on_event:
@@ -193,16 +195,123 @@ class SDNController:
             print(f"[!] Warning: Could not bind alert socket to port {self.listen_port}: {e}")
 
         while self.running:
-            # 1. Listen for socket-level alerts from UDP Client (Socket-SDN Integration)
+            # 1. Listen for socket-level messages from UDP Client (Control Plane / Alerts)
             try:
                 data, addr = self.alert_socket.recvfrom(2048)
-                alert = json.loads(data.decode('utf-8'))
-                event = alert.get("event", "UNKNOWN")
-                seq = alert.get("seq", "?")
-                consecutive = alert.get("consecutive_timeouts", 2)
-                reason = f"Socket alert from {addr[0]}: {event} (Seq {seq}, {consecutive} consecutive timeouts)"
-                self._notify("ALERT_RECEIVED", {"alert": alert, "addr": f"{addr[0]}:{addr[1]}", "reason": reason})
-                self.install_backup_path(reason)
+                msg = json.loads(data.decode('utf-8'))
+                evt = str(msg.get("event", "UNKNOWN")).upper()
+                client_host = addr[0]
+                client_endpoint = f"{addr[0]}:{addr[1]}"
+
+                # Update active clients table
+                self.active_clients[client_endpoint] = {
+                    "ip": client_host,
+                    "port": addr[1],
+                    "last_seen": time.time(),
+                    "status": "ONLINE"
+                }
+
+                if evt in ("PING", "HELLO", "CONNECT"):
+                    # Connection probe / handshake
+                    reply = {
+                        "status": "OK",
+                        "event": "PONG",
+                        "controller": "ONLINE",
+                        "active_path": self.current_path,
+                        "mode": self.mode,
+                        "reroutes": self.reroute_count,
+                        "timestamp": time.time()
+                    }
+                    self.alert_socket.sendto(json.dumps(reply).encode('utf-8'), addr)
+                    print(f"[SDN] Handshake verified with client at {client_endpoint} (Path: {self.current_path})")
+                    self._notify("CLIENT_CONNECTED", {
+                        "addr": client_endpoint,
+                        "client_ip": client_host,
+                        "path": self.current_path,
+                        "mode": self.mode,
+                        "active_clients": len(self.active_clients)
+                    })
+
+                elif evt == "SESSION_START":
+                    # File transfer initiated by client
+                    filename = msg.get("filename", "unknown")
+                    filesize = msg.get("filesize", 0)
+                    total_packets = msg.get("total_packets", 0)
+                    server_target = f"{msg.get('server_ip', '127.0.0.1')}:{msg.get('server_port', 5005)}"
+
+                    self.active_sessions[client_endpoint] = {
+                        "filename": filename,
+                        "filesize": filesize,
+                        "total_packets": total_packets,
+                        "server": server_target,
+                        "start_time": time.time()
+                    }
+
+                    reply = {
+                        "status": "OK",
+                        "event": "SESSION_ACK",
+                        "active_path": self.current_path,
+                        "mode": self.mode
+                    }
+                    self.alert_socket.sendto(json.dumps(reply).encode('utf-8'), addr)
+                    print(f"[SDN SESSION START] Client {client_endpoint} -> Server {server_target} | File: '{filename}' ({filesize} B, {total_packets} chunks) via {self.current_path}")
+                    self._notify("SESSION_START", {
+                        "addr": client_endpoint,
+                        "filename": filename,
+                        "filesize": filesize,
+                        "total_packets": total_packets,
+                        "server": server_target,
+                        "path": self.current_path,
+                        "active_sessions": len(self.active_sessions)
+                    })
+
+                elif evt in ("PATH_PROBLEM", "TIMEOUT", "TIMEOUT_ALERT") or ("consecutive_timeouts" in msg and msg.get("consecutive_timeouts", 0) >= 2):
+                    # Packet loss / link degradation alert
+                    seq = msg.get("seq", "?")
+                    consecutive = msg.get("consecutive_timeouts", 2)
+                    reason = f"Socket alert from {client_host}: {evt} (Seq {seq}, {consecutive} consecutive timeouts)"
+                    self._notify("ALERT_RECEIVED", {"alert": msg, "addr": client_endpoint, "reason": reason})
+                    rerouted = self.install_backup_path(reason)
+
+                    reply = {
+                        "status": "REROUTED" if rerouted else "NO_CHANGE",
+                        "event": "REROUTE_ACK",
+                        "active_path": self.current_path,
+                        "reroutes": self.reroute_count,
+                        "message": f"Active path is {self.current_path}"
+                    }
+                    try:
+                        self.alert_socket.sendto(json.dumps(reply).encode('utf-8'), addr)
+                    except Exception:
+                        pass
+
+                elif evt == "SESSION_END":
+                    # File transfer completed
+                    filename = msg.get("filename", "unknown")
+                    status = msg.get("status", "COMPLETED")
+                    if client_endpoint in self.active_sessions:
+                        del self.active_sessions[client_endpoint]
+
+                    reply = {"status": "OK", "event": "SESSION_END_ACK"}
+                    try:
+                        self.alert_socket.sendto(json.dumps(reply).encode('utf-8'), addr)
+                    except Exception:
+                        pass
+                    print(f"[SDN SESSION COMPLETE] Transfer '{filename}' finished ({status}) for {client_endpoint}")
+                    self._notify("SESSION_END", {
+                        "addr": client_endpoint,
+                        "filename": filename,
+                        "status": status,
+                        "active_sessions": len(self.active_sessions)
+                    })
+
+                else:
+                    # Generic / legacy alert fallback
+                    if "consecutive_timeouts" in msg:
+                        reason = f"Socket alert from {client_host}: {evt}"
+                        self._notify("ALERT_RECEIVED", {"alert": msg, "addr": client_endpoint, "reason": reason})
+                        self.install_backup_path(reason)
+
             except socket.timeout:
                 pass
             except Exception as e:

@@ -40,17 +40,47 @@ def read_file_chunks(filepath: str, chunk_size: int = CHUNK_SIZE) -> dict[int, b
         
     return chunks
 
-def send_sdn_alert(sdn_ip: str, sdn_port: int, alert_data: dict):
+def ping_sdn(sdn_ip: str = DEFAULT_SDN_IP, sdn_port: int = DEFAULT_SDN_PORT, timeout: float = 0.5) -> dict | None:
     """
-    Sends a UDP JSON path alert to the SDN Controller.
+    Sends a PING probe to the SDN Controller and returns the response dict,
+    or None if the controller does not respond within timeout seconds.
+    """
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.settimeout(timeout)
+        t0 = time.time()
+        msg = json.dumps({"event": "PING", "timestamp": t0}).encode('utf-8')
+        sock.sendto(msg, (sdn_ip, sdn_port))
+        resp_data, _ = sock.recvfrom(2048)
+        rtt_ms = (time.time() - t0) * 1000.0
+        sock.close()
+        res = json.loads(resp_data.decode('utf-8'))
+        res["rtt_ms"] = round(rtt_ms, 1)
+        res["connected"] = True
+        return res
+    except Exception:
+        return None
+
+
+def send_sdn_alert(sdn_ip: str, sdn_port: int, alert_data: dict, timeout: float = 0.5) -> dict | None:
+    """
+    Sends a UDP JSON message to the SDN Controller and optionally returns the response.
     """
     try:
         sdn_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sdn_sock.settimeout(timeout)
         msg = json.dumps(alert_data).encode('utf-8')
         sdn_sock.sendto(msg, (sdn_ip, sdn_port))
-        sdn_sock.close()
+        try:
+            resp_data, _ = sdn_sock.recvfrom(2048)
+            sdn_sock.close()
+            return json.loads(resp_data.decode('utf-8'))
+        except socket.timeout:
+            sdn_sock.close()
+            return None
     except Exception as e:
         print(f"[!] Warning: Failed to send SDN alert: {e}")
+        return None
 
 def run_client(server_ip: str = DEFAULT_SERVER_IP,
                port: int = DEFAULT_SERVER_PORT,
@@ -60,11 +90,13 @@ def run_client(server_ip: str = DEFAULT_SERVER_IP,
                window_size: int = DEFAULT_WINDOW_SIZE,
                timeout: float = DEFAULT_TIMEOUT,
                on_event = None,
-               stop_event = None) -> dict:
+               stop_event = None,
+               simulate_mode: str = "normal") -> dict:
     """
     Executes the file transfer to server_ip:port.
     Returns a dictionary of execution metrics.
-    Supports optional on_event(event_type, data) callback and stop_event for GUI integration.
+    Supports optional on_event(event_type, data) callback, stop_event,
+    and simulate_mode ("normal", "failover", "loss_15") for demonstration.
     """
     def notify(evt_type: str, **kwargs):
         if on_event:
@@ -88,7 +120,32 @@ def run_client(server_ip: str = DEFAULT_SERVER_IP,
     print(f"[*] File to Transfer:  {filepath} ({filesize} bytes, {total_packets} chunks)")
     print(f"[*] Original SHA-256:  {file_sha256}")
     print(f"[*] Sliding Window:    {window_size} packets | Timeout: {timeout}s")
+    if simulate_mode != "normal":
+        print(f"[*] Fault Simulation:  {simulate_mode.upper()}")
     print("=" * 70)
+
+    # -------------------------------------------------------------
+    # Step 0: Check & Register with SDN Controller
+    # -------------------------------------------------------------
+    active_sdn_path = "PRIMARY"
+    sdn_probe = ping_sdn(sdn_ip, sdn_port, timeout=0.5)
+    if sdn_probe and sdn_probe.get("connected"):
+        active_sdn_path = sdn_probe.get("active_path", "PRIMARY")
+        print(f"[SDN] Controller connected at {sdn_ip}:{sdn_port} (Active Path: {active_sdn_path}, Mode: {sdn_probe.get('mode', 'dynamic').upper()})")
+        notify("SDN_STATUS", connected=True, path=active_sdn_path, sdn_ip=sdn_ip, sdn_port=sdn_port, rtt_ms=sdn_probe.get("rtt_ms", 0))
+        # Register transfer session
+        send_sdn_alert(sdn_ip, sdn_port, {
+            "event": "SESSION_START",
+            "filename": filename,
+            "filesize": filesize,
+            "total_packets": total_packets,
+            "server_ip": server_ip,
+            "server_port": port,
+            "timestamp": time.time()
+        })
+    else:
+        print(f"[SDN WARNING] SDN Controller at {sdn_ip}:{sdn_port} not responding. Transfer continuing directly.")
+        notify("SDN_STATUS", connected=False, path="STANDALONE", sdn_ip=sdn_ip, sdn_port=sdn_port)
     
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.settimeout(timeout)
@@ -142,6 +199,7 @@ def run_client(server_ip: str = DEFAULT_SERVER_IP,
     consecutive_timeouts = 0
     retransmissions = 0
     sdn_alerts_sent = 0
+    sim_drops = 0
     
     while base <= total_packets:
         if stop_event and stop_event.is_set():
@@ -151,10 +209,25 @@ def run_client(server_ip: str = DEFAULT_SERVER_IP,
             if stop_event and stop_event.is_set():
                 break
             chunk = chunks[next_seq]
-            pkt = make_packet(TYPE_DATA, seq_num=next_seq, ack_num=0, payload=chunk)
-            sock.sendto(pkt, (server_ip, port))
-            print(f"[DATA] Sent Seq {next_seq} ({len(chunk)} bytes)")
-            notify("DATA_SENT", seq=next_seq, base=base, total_packets=total_packets)
+
+            # Optional fault injection to demonstrate SDN dynamic failover live
+            should_drop = False
+            if simulate_mode == "failover" and active_sdn_path == "PRIMARY":
+                if next_seq in (2, 3) and sim_drops < 2:
+                    should_drop = True
+            elif simulate_mode == "loss_15" and active_sdn_path == "PRIMARY":
+                if next_seq % 7 == 0:
+                    should_drop = True
+
+            if should_drop:
+                sim_drops += 1
+                print(f"[SIMULATED LOSS INJECTION] Intentionally suppressing Seq {next_seq} to demonstrate timeout & SDN failover...")
+                notify("SIMULATED_DROP", seq=next_seq, drop_count=sim_drops)
+            else:
+                pkt = make_packet(TYPE_DATA, seq_num=next_seq, ack_num=0, payload=chunk)
+                sock.sendto(pkt, (server_ip, port))
+                print(f"[DATA] Sent Seq {next_seq} ({len(chunk)} bytes)")
+                notify("DATA_SENT", seq=next_seq, base=base, total_packets=total_packets)
             next_seq += 1
             
         # Wait for acknowledgment
@@ -191,10 +264,15 @@ def run_client(server_ip: str = DEFAULT_SERVER_IP,
                     "client_ip": sock.getsockname()[0] if sock.getsockname()[0] != '0.0.0.0' else "10.0.0.1",
                     "timestamp": time.time()
                 }
-                send_sdn_alert(sdn_ip, sdn_port, alert_payload)
+                reply = send_sdn_alert(sdn_ip, sdn_port, alert_payload)
                 sdn_alerts_sent += 1
-                notify("SDN_ALERT", sdn_ip=sdn_ip, sdn_port=sdn_port, seq=base)
-                print(f"[SOCKET -> SDN] Sent path problem alert to SDN Controller at {sdn_ip}:{sdn_port}")
+                if reply and reply.get("active_path"):
+                    active_sdn_path = reply["active_path"]
+                    print(f"[SOCKET -> SDN] Sent alert. Controller confirmed failover to {active_sdn_path} PATH!")
+                else:
+                    active_sdn_path = "BACKUP"
+                    print(f"[SOCKET -> SDN] Sent path problem alert to SDN Controller at {sdn_ip}:{sdn_port}")
+                notify("SDN_ALERT", sdn_ip=sdn_ip, sdn_port=sdn_port, seq=base, path=active_sdn_path)
                 
             # Reset next_seq back to base to trigger retransmission of the window
             next_seq = base
@@ -227,6 +305,15 @@ def run_client(server_ip: str = DEFAULT_SERVER_IP,
     throughput_kbps = round((filesize * 8 / 1024) / duration_sec, 2)
     
     sock.close()
+
+    # Step 4: Notify SDN of Session Completion
+    send_sdn_alert(sdn_ip, sdn_port, {
+        "event": "SESSION_END",
+        "filename": filename,
+        "status": "COMPLETED" if server_report.get("integrity_ok", False) else "FAILED",
+        "duration_sec": duration_sec,
+        "timestamp": time.time()
+    })
     
     integrity_ok = server_report.get("integrity_ok", False)
     duplicates = server_report.get("duplicates", 0)

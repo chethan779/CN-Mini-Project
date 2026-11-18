@@ -31,7 +31,7 @@ from protocol import (
     DEFAULT_WINDOW_SIZE, DEFAULT_TIMEOUT,
     CHUNK_SIZE, get_file_sha256
 )
-from client import run_client, read_file_chunks
+from client import run_client, read_file_chunks, ping_sdn
 from server import run_server
 
 # Modern dark-mode color theme
@@ -188,6 +188,12 @@ class AppGUI(tk.Tk):
                                           command=lambda: self.switch_to_mode("receiver"))
         self.btn_nav_receiver.pack(side=tk.LEFT, padx=4)
 
+        self.btn_nav_sdn = tk.Button(btn_box, text="🌐 SDN Controller", font=("DejaVu Sans", 9, "bold"),
+                                     bg=THEME["entry_bg"], fg=THEME["orange"], activebackground=THEME["orange"],
+                                     relief=tk.FLAT, padx=12, pady=5, cursor="hand2",
+                                     command=self.open_sdn_controller)
+        self.btn_nav_sdn.pack(side=tk.LEFT, padx=4)
+
         btn_switch_role = tk.Button(btn_box, text="🔄 Choose Role", font=("DejaVu Sans", 9),
                                     bg=THEME["card_bg"], fg=THEME["text_dim"], relief=tk.GROOVE,
                                     padx=8, pady=5, cursor="hand2", command=self.show_role_selector)
@@ -197,6 +203,11 @@ class AppGUI(tk.Tk):
                                    bg=THEME["card_bg"], fg=THEME["accent"], relief=tk.GROOVE,
                                    padx=8, pady=5, cursor="hand2", command=self.open_new_window)
         btn_new_window.pack(side=tk.LEFT, padx=4)
+
+    def open_sdn_controller(self):
+        """Launches the standalone SDN Controller & Topology Visualizer."""
+        sdn_script = os.path.join(os.path.dirname(__file__), "sdn_gui.py")
+        subprocess.Popen([sys.executable, sdn_script])
 
     def open_new_window(self):
         """Spawns an independent second window so user can run Sender and Receiver simultaneously."""

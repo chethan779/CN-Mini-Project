@@ -82,6 +82,9 @@ class SDNGUI(tk.Tk):
         self._poll_event_queue()
         self._start_animation_loop()
 
+        # Automatically start the SDN Controller on launch for plug-and-play operation
+        self.after(200, self.start_controller)
+
     def _build_header(self):
         nav_bar = tk.Frame(self, bg=THEME["card_bg"], height=56, highlightbackground=THEME["border"],
                            highlightthickness=1)
@@ -187,6 +190,9 @@ class SDNGUI(tk.Tk):
         self.stat_path = self._create_stat_badge(s_grid, "Active Routing Path", "PRIMARY (s1->s2->s4)", 0, 0, color=THEME["green"])
         self.stat_reroutes = self._create_stat_badge(s_grid, "Dynamic Reroutes", "0", 0, 1, color=THEME["orange"])
         self.stat_alerts = self._create_stat_badge(s_grid, "Client Alerts (Port 9999)", "0", 0, 2, color=THEME["yellow"])
+        self.stat_clients = self._create_stat_badge(s_grid, "Connected Clients", "0", 1, 0, color=THEME["accent"])
+        self.stat_session = self._create_stat_badge(s_grid, "Active Transfer", "Idle", 1, 1, color=THEME["text"])
+        self.stat_control = self._create_stat_badge(s_grid, "Control Plane", "UDP 9999", 1, 2, color=THEME["green"])
 
         # --- RIGHT: Telemetry Graphs & Alert Stream ---
         graph_card = ModernCard(right_col)
@@ -357,7 +363,25 @@ class SDNGUI(tk.Tk):
             pass
 
     def _handle_sdn_event(self, evt: str, data: dict):
-        if evt == "ALERT_RECEIVED":
+        if evt == "CLIENT_CONNECTED":
+            client_ip = data.get("client_ip", "Client")
+            active_c = data.get("active_clients", 1)
+            self.stat_clients.config(text=f"{active_c} ({client_ip})")
+            self.log(f"[CLIENT CONNECTED] Handshake confirmed from {data.get('addr')} (Path: {data.get('path')})", "INFO")
+
+        elif evt == "SESSION_START":
+            filename = data.get("filename", "-")
+            total_pkts = data.get("total_packets", 0)
+            self.stat_session.config(text=f"{filename} ({total_pkts} pkts)")
+            self.log(f"[SESSION START] {data.get('addr')} -> File: '{filename}' ({data.get('filesize')} B) via {data.get('path')} PATH", "REROUTE")
+
+        elif evt == "SESSION_END":
+            filename = data.get("filename", "-")
+            status = data.get("status", "COMPLETED")
+            self.stat_session.config(text="Idle")
+            self.log(f"[SESSION COMPLETE] '{filename}' finished with status: {status}", "INFO")
+
+        elif evt == "ALERT_RECEIVED":
             self.alerts_count += 1
             self.stat_alerts.config(text=str(self.alerts_count))
             reason = data.get("reason", "Degraded link")
