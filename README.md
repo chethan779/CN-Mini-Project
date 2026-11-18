@@ -9,15 +9,26 @@
 
 ---
 
+## 📑 Documentation & Reports
+All official documentation, project reports, and viva preparation handbooks are organized in the [`docs/`](docs/) directory:
+* 📄 **[Reliable_UDP_File_Transfer_SDN_Project_Report.docx](docs/Reliable_UDP_File_Transfer_SDN_Project_Report.docx)**: Comprehensive 12-section technical project report with embedded GUI & terminal execution figures.
+* 📘 **[CN_Mini_Project_Team_Presentation_and_Viva_Handbook.docx](docs/CN_Mini_Project_Team_Presentation_and_Viva_Handbook.docx)**: Team role breakdown, viva questions & answers, rubric mapping.
+* 📊 **[CN_Project_Presentation_Guide.docx](docs/CN_Project_Presentation_Guide.docx)**: Quick presentation slide deck guide and live demonstration script.
+* 📜 **[SDN-Socket Programming-Guidelines_Rubrics.pdf](docs/SDN-Socket%20Programming-Guidelines_Rubrics.pdf)**: Official faculty evaluation guidelines and rubrics (40 Marks).
+* 🐧 **[Mininet Installation Guide on UBUNTU.docx.pdf](docs/Mininet%20Installation%20Guide%20on%20UBUNTU.docx.pdf)**: Guide for setting up Mininet and Open vSwitch.
+
+---
+
 ## Table of Contents
 1. [Project Overview](#1-project-overview)
 2. [Project File Structure](#2-project-file-structure)
 3. [Protocol Specification & Packet Header](#3-protocol-specification--packet-header)
-4. [Step-by-Step Guide: Running on 1 Laptop](#4-step-by-step-guide-running-on-1-laptop)
-5. [Step-by-Step Guide: Running on 3 Laptops](#5-step-by-step-guide-running-on-3-laptops)
-6. [Performance Benchmark & Results](#6-performance-benchmark--results)
-7. [Viva Explanation & Team Division](#7-viva-explanation--team-division)
-8. [Troubleshooting & Network Configuration](#8-troubleshooting--network-configuration)
+4. [Screenshots & Demonstration Gallery](#4-screenshots--demonstration-gallery)
+5. [Step-by-Step Guide: Running on 1 Laptop](#5-step-by-step-guide-running-on-1-laptop)
+6. [Step-by-Step Guide: Running on 3 Laptops](#6-step-by-step-guide-running-on-3-laptops)
+7. [Performance Benchmark & Results](#7-performance-benchmark--results)
+8. [Viva Explanation & Team Division](#8-viva-explanation--team-division)
+9. [Troubleshooting & Network Configuration](#9-troubleshooting--network-configuration)
 
 ---
 
@@ -30,8 +41,8 @@ This project implements an **application-layer reliable transport protocol over 
 ### Key Highlights
 * **Low-Level Python Sockets**: Pure `socket.SOCK_DGRAM` with no external networking frameworks.
 * **13-Byte Compact Binary Header**: Packed with network byte order `struct.pack('!BIII', ...)`.
-* **Sliding Window Protocol**: Window size $W=4$ with cumulative ACKs and $0.3\text{s}$ socket timeouts.
-* **Out-of-Order Buffering & Gap Detection**: The server buffers future packets when gaps appear and flushes them in-order once the missing packet arrives.
+* **Sliding Window Protocol**: Window size $W=4$ (configurable to 5) with cumulative ACKs and $0.3\text{s}$ socket timeouts.
+* **Out-of-Order Buffering & Gap Detection**: The server buffers future packets when gaps appear and flushes them in-order once missing packets arrive.
 * **Duplicate Detection**: Identifies redundant packets from window retransmissions and resends cumulative ACKs.
 * **End-to-End File Integrity**: SHA-256 hash computed before transmission, exchanged during `SYN`, and verified upon `FIN`.
 * **Socket-SDN Closed Feedback Loop**: Client notifies SDN controller on UDP port `9999` after $\ge 2$ consecutive timeouts.
@@ -52,12 +63,29 @@ cn-mini-project/
 ├── topo.py             # Mininet 4-switch, 3-host multipath network topology
 ├── evaluate.py         # 4-scenario benchmark suite with graph generation
 ├── demo_test.py        # 1-command end-to-end local demo verification
+├── docs/               # Technical reports, viva handbooks, presentation guides, PDFs
+│   ├── Reliable_UDP_File_Transfer_SDN_Project_Report.docx
+│   ├── CN_Mini_Project_Team_Presentation_and_Viva_Handbook.docx
+│   ├── CN_Project_Presentation_Guide.docx
+│   ├── SDN-Socket Programming-Guidelines_Rubrics.pdf
+│   ├── Mininet Installation Guide on UBUNTU.docx.pdf
+│   └── Problem_Statement.png
+├── screenshots/        # High-resolution demonstration captures (GUI & Terminal)
+│   ├── 01_sender_transfer_completed.png
+│   ├── 02_receiver_server_completed.png
+│   ├── 03_sdn_controller_reroute.png
+│   ├── 04_terminal_receiver_server.png
+│   ├── 05_terminal_sender_client.png
+│   └── 06_terminal_sdn_controller.png
+├── scripts/            # Tooling scripts for screenshot capture and docx injection
+│   ├── take_screenshots.py
+│   ├── generate_terminal_screenshots.py
+│   └── insert_screenshots.py
 ├── files/              # Sample transfer files (sample.bin 100KB, sample.txt)
-├── received/           # Destination directory where received files are saved
+├── received/           # Destination directory where received files are saved (.gitkeep)
 ├── results/            # Benchmark outputs (metrics.json, comparison_graph.png)
-├── docs/               # Assignment guidelines, Mininet guides, problem statement
-├── .gitignore          # Ignores bytecode, caches, and test artifacts
-└── README.md           # Complete documentation & multi-laptop guide
+├── .gitignore          # Clean git ignore configuration
+└── README.md           # Master documentation and execution guide
 ```
 
 ---
@@ -91,11 +119,45 @@ cn-mini-project/
 
 ---
 
-## 4. Step-by-Step Guide: Running on 1 Laptop
+## 4. Screenshots & Demonstration Gallery
 
-On a single laptop, all components communicate over the internal loopback interface (`127.0.0.1`). You can run the demo in four different ways:
+### Graphical User Interface (GUI) Visualizations
 
-### Mode 1A: Interactive Graphical User Interface (Recommended)
+#### 1. Sender (Client) GUI — Completed Transfer with Live Telemetry
+Shows transmission completion (100%), real-time packet progress plot (ACK vs. Sent), delivery vs. loss breakdown, and verified SHA-256 digest.
+![Sender Client GUI](screenshots/01_sender_transfer_completed.png)
+
+#### 2. Receiver (Server) GUI — Chunk Reassembly & Cryptographic Validation
+Displays dynamic packet arrival, reassembly buffer telemetry, packet classification chart, and instant `PASS (SHA-256 Match)` verification.
+![Receiver Server GUI](screenshots/02_receiver_server_completed.png)
+
+#### 3. SDN Controller GUI — Real-Time Topology & Dynamic Failover
+Visualizes the 4-switch topology (`s1`, `s2`, `s3`, `s4`), detects client timeout alerts on port 9999, and dynamically switches the active route to the backup path via Switch `s3` with `priority=200` OpenFlow rules.
+![SDN Controller GUI](screenshots/03_sdn_controller_reroute.png)
+
+---
+
+### Terminal & Console Execution Evidence
+
+#### 4. Receiver Server Terminal Console
+Shows UDP socket binding on `0.0.0.0:5005`, SYN session initialization, sequential data reception, cumulative ACK dispatch, and file SHA-256 match.
+![Receiver Server Terminal](screenshots/04_terminal_receiver_server.png)
+
+#### 5. Sender Client Terminal Console
+Details 1 KB chunking, sliding window transmission ($W=5$), timeout detection, selective retransmissions, UDP alert emission to SDN controller, and throughput calculation.
+![Sender Client Terminal](screenshots/05_terminal_sender_client.png)
+
+#### 6. SDN Controller Terminal Console
+Demonstrates UDP alert listener on port `9999`, link impairment threshold evaluation, and dynamic OpenFlow flow modification on Switch `s1`.
+![SDN Controller Terminal](screenshots/06_terminal_sdn_controller.png)
+
+---
+
+## 5. Step-by-Step Guide: Running on 1 Laptop
+
+On a single laptop, all components communicate over the internal loopback interface (`127.0.0.1`). You can run the demo in four different modes:
+
+### Mode 1A: Interactive Graphical User Interface (Recommended for Viva)
 Run the full visual experience with live progress, file pickers, packet telemetry, loss percentage, and real-time graphs.
 
 #### Window Arrangement:
@@ -131,7 +193,7 @@ Open **3 terminal windows** side-by-side on your screen:
    ```
    * Click **🚀 Sender (Client)**.
    * A file picker popup appears. Choose any file from your laptop (e.g., `files/sample.bin` or any PDF/binary file).
-   * Notice the **Server IP** and **SDN IP** already default to `127.0.0.1`.
+   * Notice the **Server IP** and **SDN IP** already default to `127.0.0.1` (or click the **Localhost (127.0.0.1)** preset button).
    * Click **▶ Start File Transfer**.
 
 #### What You Will Observe Live:
@@ -147,17 +209,21 @@ Validates all features (handshake, loss, timeout, gap buffering, SDN alert, rero
 python3 demo_test.py
 ```
 
+---
+
 ### Mode 1C: Automated Performance Benchmark
 Runs all 4 scenarios, outputs statistics, and generates the 3-panel comparison chart:
 ```bash
 python3 evaluate.py
 ```
 Outputs:
-* [results/metrics.json](results/metrics.json)
-* [results/comparison_graph.png](results/comparison_graph.png)
+* [`results/metrics.json`](results/metrics.json)
+* [`results/comparison_graph.png`](results/comparison_graph.png)
+
+---
 
 ### Mode 1D: Live Mininet SDN Emulation
-*(Requires Ubuntu / Linux with Mininet installed)*
+*(Requires Linux with Mininet & Open vSwitch installed)*
 
 Open **3 Terminal windows** side-by-side on your screen:
 
@@ -203,12 +269,12 @@ mininet> link s1 s2 down
 
 ---
 
-## 5. Step-by-Step Guide: Running on 3 Laptops
+## 6. Step-by-Step Guide: Running on 3 Laptops
 
 Running across 3 physical laptops allows all three team members to demonstrate their individual components live in front of the examiners.
 
 ### Network Pre-requisites
-1. Connect all 3 laptops to the **same Wi-Fi router** or a **Mobile Phone Hotspot**.
+1. Connect all 3 laptops to the **same Wi-Fi network** or a **Mobile Phone Hotspot**.
 2. Find the local IP address of each laptop:
    * **Linux**: run `hostname -I` (or look at the top bar in `app_gui.py`, which shows your detected LAN IP automatically).
    * **Mac**: run `ipconfig getifaddr en0`.
@@ -290,7 +356,7 @@ python3 client.py --file files/sample.bin --server-ip 192.168.1.101 --port 5005 
 
 | Demonstration Phase | What Laptop 3 (Client) Shows | What Laptop 2 (SDN) Shows | What Laptop 1 (Server) Shows |
 |:---|:---|:---|:---|
-| **Phase 1: Normal Transfer** | Transmits with sliding window ($W=4$). Live throughput graph increases smoothly. | Displays traffic routing through **Primary Path** (`s1->s2->s4`) in bright neon green. | Receives chunks in order and cumulative ACKs them. Progress bar advances to 100%. |
+| **Phase 1: Normal Transfer** | Transmits with sliding window ($W=5$). Live throughput graph increases smoothly. | Displays traffic routing through **Primary Path** (`s1->s2->s4`) in bright neon green. | Receives chunks in order and cumulative ACKs them. Progress bar advances to 100%. |
 | **Phase 2: Dynamic Failover Demo** | Client encounters packet loss or link severance. Retransmits window and alerts Laptop 2 on port `9999`. | Automatically detects consecutive timeout alert, installs `priority=200` override, and switches active route to **Backup Path** (`s1->s3->s4`). Topology pulses amber. | Missing packet buffer flushes in-order, file completes with **`SHA-256 MATCH VERIFIED`**. |
 
 ---
@@ -304,7 +370,7 @@ python3 client.py --file files/sample.bin --server-ip 192.168.1.101 --port 5005 
 | **SDN IP to enter** | `127.0.0.1` | Laptop 2's LAN IP (`192.168.X.X`) |
 | **Best used for** | Quick testing, solo debugging, evaluation benchmarks | Final team viva, physical live demo with all 3 team members |
 
-#### STEP 4: Demonstrate Concurrent Multi-Client Transfer
+#### Concurrent Multi-Client Transfer:
 While Laptop 3 is sending a file, a second terminal on Laptop 3 (or a 4th device) can run:
 ```bash
 python3 client.py --file files/sample.txt --server-ip 192.168.1.101 --port 5005 --sdn-ip 192.168.1.102 --sdn-port 9999
@@ -315,7 +381,7 @@ python3 client.py --file files/sample.txt --server-ip 192.168.1.101 --port 5005 
 
 ---
 
-## 6. Performance Benchmark & Results
+## 7. Performance Benchmark & Results
 
 Run the automated evaluation on any machine:
 ```bash
@@ -336,30 +402,30 @@ python3 evaluate.py
 2. **Dynamic SDN Recovery**: When consecutive timeouts occur, the client alerts the SDN controller. The controller switches the flow to the backup path, restoring throughput to **877.2 kbps** (>5x improvement over static).
 3. **Link Failure Resilience**: A severed link causes permanent stall on static routing. Dynamic failover recovers within milliseconds, achieving 100% SHA-256 integrity.
 
-The resulting 3-panel chart is saved at [results/comparison_graph.png](results/comparison_graph.png):
+The resulting 3-panel chart is saved at [`results/comparison_graph.png`](results/comparison_graph.png):
 
 ![Performance Comparison Graph](results/comparison_graph.png)
 
 ---
 
-## 7. Viva Explanation & Team Division
+## 8. Viva Explanation & Team Division
 
 ### Team Member 1: Transport Layer & Protocol Design
-* **File Owned**: [protocol.py](protocol.py) & [server.py](server.py)
+* **File Owned**: [`protocol.py`](protocol.py) & [`server.py`](server.py)
 * **Topics to Explain**:
   * Binary header layout (`!BIII`), why network byte order is necessary.
   * Difference between TCP and UDP, and why building reliability at application layer allows cross-layer SDN integration.
   * Server-side sliding window tracking (`expected_seq`), out-of-order packet buffering dictionary, duplicate detection, and SHA-256 checksum verification.
 
 ### Team Member 2: Mininet Topology & OpenFlow Rules
-* **File Owned**: [topo.py](topo.py) & [sdn_controller.py](sdn_controller.py)
+* **File Owned**: [`topo.py`](topo.py) & [`sdn_controller.py`](sdn_controller.py)
 * **Topics to Explain**:
   * Mininet multipath architecture: 3 hosts, 4 switches (`s1, s2, s3, s4`).
   * Why `failMode='secure'` is mandatory to prevent learning-switch broadcast loops.
   * OpenFlow 1.3 flow tables and priority matching (`priority=100` primary path vs `priority=200` backup path override).
 
 ### Team Member 3: Socket-SDN Integration & Evaluation
-* **File Owned**: [client.py](client.py) & [evaluate.py](evaluate.py)
+* **File Owned**: [`client.py`](client.py) & [`evaluate.py`](evaluate.py)
 * **Topics to Explain**:
   * Closed-loop Socket-SDN feedback mechanism: why client alerts controller on port 9999 after 2 consecutive timeouts.
   * Proactive link health checks (`ip link`, `tc qdisc`, port drop counters).
@@ -367,7 +433,7 @@ The resulting 3-panel chart is saved at [results/comparison_graph.png](results/c
 
 ---
 
-## 8. Troubleshooting & Network Configuration
+## 9. Troubleshooting & Network Configuration
 
 1. **`Connection refused` or `timed out` on 3 laptops**:
    * Verify all 3 laptops can ping each other: `ping <IP_OF_OTHER_LAPTOP>`.

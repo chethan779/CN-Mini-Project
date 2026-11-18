@@ -3,9 +3,15 @@ __pycache__/
 *.py[cod]
 *$py.class
 
-# Temporary test outputs
+# Temporary test outputs & logs
 received/recv_*
 !received/.gitkeep
+*.log
+
+# Office lock and backup files
+.~lock.*#
+*.bak
+*.tmp
 
 # Environment & IDE
 .vscode/
